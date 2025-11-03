@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 222 47% 11%;
+    --foreground: 180 100% 90%;
+
+    --card: 222 47% 15%;
+    --card-foreground: 180 100% 90%;
+
+    --popover: 222 47% 13%;
+    --popover-foreground: 180 100% 90%;
+
+    --primary: 180 100% 50%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 158 64% 52%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 222 47% 20%;
+    --muted-foreground: 180 20% 65%;
+
+    --accent: 180 100% 50%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 180 100% 90%;
+
+    --border: 222 47% 25%;
+    --input: 222 47% 20%;
+    --ring: 180 100% 50%;
+
+    --radius: 0.75rem;
+
+    --encrypted-glow: 180 100% 50%;
+    --success-glow: 158 64% 52%;
+    
+    --gradient-primary: linear-gradient(135deg, hsl(180 100% 50% / 0.2), hsl(158 64% 52% / 0.2));
+    --shadow-glow: 0 0 30px hsl(180 100% 50% / 0.3);
+    --shadow-card: 0 10px 40px hsl(222 47% 5% / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  .glow-text {
+    text-shadow: 0 0 20px hsl(var(--encrypted-glow) / 0.5);
+  }
+
+  .glow-border {
+    box-shadow: 0 0 20px hsl(var(--encrypted-glow) / 0.3);
+  }
+
+  .encrypted-shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--encrypted-glow) / 0.1),
+      transparent
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite;
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% {
+      box-shadow: 0 0 20px hsl(var(--encrypted-glow) / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px hsl(var(--encrypted-glow) / 0.5);
+    }
+  }
+
+  .pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+}
