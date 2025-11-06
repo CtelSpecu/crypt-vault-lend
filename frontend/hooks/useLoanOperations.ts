@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { Address, Hash, PublicClient } from "viem";
+import { bytesToHex } from "viem";
 import { useWriteContract } from "wagmi";
 import { FhevmInstance } from "@/fhevm/fhevmTypes";
 import { LENDING_POOL_ABI } from "@/contracts/lendingPool";
@@ -59,6 +60,10 @@ export function useLoanOperations({
     [publicClient, onSettled]
   );
 
+  const normalizeProof = useCallback((proof: Uint8Array | string) => {
+    return typeof proof === "string" ? proof : bytesToHex(proof);
+  }, []);
+
   const encryptValue = useCallback(
     async (value: number) => {
       if (!supportsFhe || !contractAddress || !instance || !account) {
@@ -105,13 +110,13 @@ export function useLoanOperations({
           functionName: "createLoan",
           args: [
             amountEnc.handles[0],
-            amountEnc.inputProof,
+            normalizeProof(amountEnc.inputProof),
             rateEnc.handles[0],
-            rateEnc.inputProof,
+            normalizeProof(rateEnc.inputProof),
             values.duration,
             values.collateralType,
             collateralEnc.handles[0],
-            collateralEnc.inputProof,
+            normalizeProof(collateralEnc.inputProof),
           ],
         });
 
@@ -120,7 +125,7 @@ export function useLoanOperations({
         setIsCreating(false);
       }
     },
-    [contractAddress, supportsFhe, encryptValue, writeContractAsync, waitReceipt]
+    [contractAddress, supportsFhe, encryptValue, normalizeProof, writeContractAsync, waitReceipt]
   );
 
   const fundLoan = useCallback(
