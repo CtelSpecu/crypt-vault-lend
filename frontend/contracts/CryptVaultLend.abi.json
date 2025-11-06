@@ -177,6 +177,11 @@
         "type": "string"
       },
       {
+        "internalType": "euint32",
+        "name": "collateralAmount",
+        "type": "bytes32"
+      },
+      {
         "internalType": "enum CryptVaultLend.LoanStatus",
         "name": "status",
         "type": "uint8"

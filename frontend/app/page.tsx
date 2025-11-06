@@ -3,11 +3,10 @@
 import { useMemo, useState } from "react";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { toast } from "sonner";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldCheck, Lock, Unlock, Eye } from "lucide-react";
 
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
-import { PoolStats } from "@/components/PoolStats";
 import { SubmitLoanForm } from "@/components/SubmitLoanForm";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,9 +14,15 @@ import { Button } from "@/components/ui/button";
 
 import { useLoanData } from "@/hooks/useLoanData";
 import { useLoanOperations } from "@/hooks/useLoanOperations";
+import { useLoanDecryption } from "@/hooks/useLoanDecryption";
+import { useEthersSigner } from "@/hooks/useEthersSigner";
 import { getLendingPoolAddress } from "@/contracts/lendingPool";
 import { LoanEntry } from "@/lib/lending";
 import { useFhevm } from "@/fhevm/useFhevm";
+import { GenericStringInMemoryStorage } from "@/fhevm/GenericStringStorage";
+
+// Persistent storage for decryption signatures
+const decryptionStorage = new GenericStringInMemoryStorage();
 
 export default function Home() {
   const { address, isConnected, chain } = useAccount();
@@ -25,7 +30,10 @@ export default function Home() {
   const publicClient = usePublicClient();
 
   const [refreshKey, setRefreshKey] = useState(0);
-  const contractAddress = useMemo(() => (chain?.id ? getLendingPoolAddress(chain.id) : undefined), [chain?.id]);
+  const contractAddress = useMemo(
+    () => (chain?.id ? getLendingPoolAddress(chain.id) : undefined),
+    [chain?.id]
+  );
 
   const { instance, status: fheStatus, error: fheError } = useFhevm({
     provider: walletClient?.transport,
@@ -33,7 +41,10 @@ export default function Home() {
     enabled: Boolean(walletClient && chain?.id),
   });
 
-  const { stats, myLoans, availableLoans, isLoading } = useLoanData({
+  // Get ethers signer for decryption
+  const ethersSigner = useEthersSigner();
+
+  const { myLoans, isLoading } = useLoanData({
     contractAddress,
     publicClient,
     refreshKey,
@@ -42,12 +53,25 @@ export default function Home() {
 
   const onSettled = () => setRefreshKey((prev) => prev + 1);
 
-  const { createLoan, fundLoan, repayLoan, isCreating, isFunding, isRepaying } = useLoanOperations({
+  const { createLoan, repayLoan, isCreating, isRepaying } = useLoanOperations({
     contractAddress,
     instance,
     account: address,
     publicClient,
     onSettled,
+  });
+
+  const {
+    decryptLoan,
+    getDecryptedLoan,
+    isDecrypting,
+    message: decryptMessage,
+  } = useLoanDecryption({
+    instance,
+    contractAddress,
+    ethersSigner,
+    storage: decryptionStorage,
+    chainId: chain?.id,
   });
 
   const submitDisabledMessage = useMemo(() => {
@@ -66,120 +90,203 @@ export default function Home() {
     return undefined;
   }, [isConnected, contractAddress, fheStatus, fheError]);
 
-  const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
-  const formatHandle = (value: string) => `${value.slice(0, 8)}…${value.slice(-6)}`;
-
-  const handleFundLoan = async (loan: LoanEntry) => {
-    try {
-      const hash = await fundLoan(loan.id);
-      toast.success("Loan funded", { description: `Transaction sent: ${hash}` });
-    } catch (error) {
-      toast.error("Funding failed", { description: (error as Error).message });
-    }
-  };
+  const shortAddress = (value: string) =>
+    `${value.slice(0, 6)}…${value.slice(-4)}`;
 
   const handleRepayLoan = async (loan: LoanEntry) => {
     try {
       const hash = await repayLoan(loan.id);
       toast.success("Loan repaid", { description: `Transaction sent: ${hash}` });
     } catch (error) {
-      toast.error("Repayment failed", { description: (error as Error).message });
+      toast.error("Repayment failed", {
+        description: (error as Error).message,
+      });
     }
   };
 
-  const LoanList = ({
-    title,
-    description,
-    loans,
-    emptyState,
-    renderAction,
-  }: {
-    title: string;
-    description: string;
-    loans: LoanEntry[];
-    emptyState: string;
-    renderAction?: (loan: LoanEntry) => React.ReactNode;
-  }) => (
-    <Card className="p-6 bg-card border-border">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <p className="text-sm text-secondary uppercase tracking-widest">{title}</p>
-          <p className="text-lg text-muted-foreground">{description}</p>
+  const handleDecryptLoan = async (loan: LoanEntry) => {
+    try {
+      await decryptLoan(
+        loan.id,
+        loan.amountHandle,
+        loan.interestHandle,
+        loan.collateralHandle
+      );
+      toast.success("Decryption completed", {
+        description: "Your loan values are now visible.",
+      });
+    } catch (error) {
+      toast.error("Decryption failed", {
+        description: (error as Error).message,
+      });
+    }
+  };
+
+  const formatDecryptedValue = (value: bigint | undefined, suffix = "") => {
+    if (value === undefined) return null;
+    return `${Number(value).toLocaleString()}${suffix}`;
+  };
+
+  const LoanCard = ({ loan }: { loan: LoanEntry }) => {
+    const decrypted = getDecryptedLoan(loan.id);
+    const isDecrypted = decrypted?.amount !== undefined;
+
+    return (
+      <Card className="p-5 bg-card border-border hover:border-primary/30 transition-all">
+        <div className="flex items-center justify-between mb-4">
+          <div className="font-mono text-sm text-muted-foreground">
+            Loan #{loan.id.toString()}
+          </div>
+          <Badge
+            className={
+              loan.status === "available"
+                ? "bg-secondary/20 text-secondary"
+                : loan.status === "active"
+                ? "bg-primary/20 text-primary"
+                : "bg-muted/40 text-muted-foreground"
+            }
+          >
+            {loan.status.toUpperCase()}
+          </Badge>
         </div>
-        {isLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
-      </div>
 
-      {loans.length === 0 ? (
-        <div className="text-sm text-muted-foreground">{emptyState}</div>
-      ) : (
-        <div className="space-y-4">
-          {loans.map((loan) => (
-            <div
-              key={loan.id.toString()}
-              className="rounded-lg border border-border p-4 flex flex-col gap-3"
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-mono text-sm text-muted-foreground">Loan #{loan.id.toString()}</div>
-                <Badge
-                  className={
-                    loan.status === "available"
-                      ? "bg-secondary/20 text-secondary"
-                      : loan.status === "active"
-                      ? "bg-primary/20 text-primary"
-                      : "bg-muted/40 text-muted-foreground"
-                  }
-                >
-                  {loan.status.toUpperCase()}
-                </Badge>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-muted-foreground">Borrower</p>
-                  <p className="font-mono text-foreground">{shortAddress(loan.borrower)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Duration</p>
-                  <p className="text-foreground">{loan.duration} months</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Collateral</p>
-                  <p className="text-foreground">{loan.collateralType}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Encrypted Amount</p>
-                  <p className="font-mono text-xs text-primary">{formatHandle(loan.amountHandle)}</p>
-                </div>
-              </div>
-
-              {renderAction?.(loan)}
+        <div className="space-y-3">
+          {/* Encrypted/Decrypted Values */}
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">Amount (USD)</p>
+              {isDecrypted ? (
+                <p className="text-foreground font-medium flex items-center gap-1">
+                  <Unlock className="h-3 w-3 text-secondary" />
+                  ${formatDecryptedValue(decrypted.amount)}
+                </p>
+              ) : (
+                <p className="font-mono text-xs text-primary flex items-center gap-1">
+                  <Lock className="h-3 w-3" />
+                  {loan.amountHandle.slice(0, 10)}…
+                </p>
+              )}
             </div>
-          ))}
+
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">Interest Rate</p>
+              {isDecrypted ? (
+                <p className="text-foreground font-medium flex items-center gap-1">
+                  <Unlock className="h-3 w-3 text-secondary" />
+                  {formatDecryptedValue(
+                    decrypted.interestRate !== undefined
+                      ? decrypted.interestRate / BigInt(100)
+                      : undefined,
+                    "%"
+                  )}
+                </p>
+              ) : (
+                <p className="font-mono text-xs text-primary flex items-center gap-1">
+                  <Lock className="h-3 w-3" />
+                  {loan.interestHandle.slice(0, 10)}…
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">Collateral</p>
+              {isDecrypted && decrypted.collateralAmount !== undefined ? (
+                <p className="text-foreground font-medium flex items-center gap-1">
+                  <Unlock className="h-3 w-3 text-secondary" />
+                  ${formatDecryptedValue(decrypted.collateralAmount)} {loan.collateralType}
+                </p>
+              ) : (
+                <p className="text-foreground">
+                  {loan.collateralType}
+                  {loan.collateralHandle && (
+                    <span className="font-mono text-xs text-primary ml-1">
+                      <Lock className="h-3 w-3 inline" />
+                    </span>
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">Duration</p>
+              <p className="text-foreground">{loan.duration} months</p>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-2">
+            {!isDecrypted && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleDecryptLoan(loan)}
+                disabled={isDecrypting || !instance || fheStatus !== "ready"}
+                className="flex-1"
+              >
+                {isDecrypting ? (
+                  <>
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    Decrypting...
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-3 w-3 mr-1" />
+                    Decrypt Values
+                  </>
+                )}
+              </Button>
+            )}
+
+            {loan.status === "active" && (
+              <Button
+                size="sm"
+                onClick={() => handleRepayLoan(loan)}
+                disabled={isRepaying}
+                className="flex-1"
+              >
+                {isRepaying ? "Repaying..." : "Repay Loan"}
+              </Button>
+            )}
+
+            {loan.status === "available" && (
+              <div className="flex-1 text-xs text-muted-foreground text-center py-2">
+                Waiting for lender funding…
+              </div>
+            )}
+
+            {loan.status === "completed" && (
+              <div className="flex-1 text-xs text-secondary text-center py-2">
+                Loan completed
+              </div>
+            )}
+          </div>
         </div>
-      )}
-    </Card>
-  );
+      </Card>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
 
-      <main className="flex-1 container mx-auto px-4 py-8 space-y-8">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-sm text-secondary uppercase tracking-[0.4em]">
+      <main className="flex-1 container mx-auto px-4 py-8 max-w-4xl">
+        {/* Hero Section */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 text-sm text-secondary uppercase tracking-[0.3em] mb-3">
             <ShieldCheck className="h-4 w-4" />
-            FULLY HOMOMORPHIC ENCRYPTED LENDING
+            FHE-ENCRYPTED LENDING
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-2 glow-text">
-            Submit private loan intents, settle transparently on-chain.
+          <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-3">
+            Private Loan Requests
           </h1>
-          <p className="text-muted-foreground max-w-3xl">
-            This MVP wires RainbowKit, wagmi and the FHE relayer so every amount stays encrypted end-to-end.
-            Use your wallet to submit, fund or repay encrypted loans on Sepolia or a local Hardhat node.
+          <p className="text-muted-foreground max-w-xl mx-auto">
+            Submit encrypted loan requests. Your amounts and rates stay private
+            on-chain until you choose to decrypt them.
           </p>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-6">
+        {/* Submit Loan Form */}
+        <div className="mb-8">
           <SubmitLoanForm
             onSubmit={async (values) => {
               await createLoan(values);
@@ -187,60 +294,43 @@ export default function Home() {
             isSubmitting={isCreating}
             disabledMessage={submitDisabledMessage}
           />
-
-          <PoolStats
-            totalValueLocked={stats?.totalValueLocked}
-            totalLoansActive={stats?.totalLoansActive}
-            averageAPY={stats?.averageAPY}
-            utilizationRate={stats?.utilizationRate}
-            isLoading={isLoading}
-          />
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-6">
-          <LoanList
-            title="My Loans"
-            description="Encrypted requests created with this wallet"
-            loans={myLoans}
-            emptyState="No loans yet. Submit an encrypted request to get started."
-            renderAction={(loan) => {
-              if (loan.status === "active") {
-                return (
-                  <Button
-                    onClick={() => handleRepayLoan(loan)}
-                    disabled={isRepaying}
-                    className="w-full"
-                  >
-                    {isRepaying ? "Submitting repayment..." : "Repay Loan"}
-                  </Button>
-                );
-              }
-              if (loan.status === "available") {
-                return (
-                  <div className="text-xs text-muted-foreground">Waiting for lender funding…</div>
-                );
-              }
-              return (
-                <div className="text-xs text-muted-foreground">Completed</div>
-              );
-            }}
-          />
-
-          <LoanList
-            title="Available Loans"
-            description="Fund borrowers and earn encrypted yield"
-            loans={availableLoans}
-            emptyState="No loans are open for funding right now."
-            renderAction={(loan) => (
-              <Button
-                onClick={() => handleFundLoan(loan)}
-                disabled={isFunding || !isConnected}
-                className="w-full bg-secondary hover:bg-secondary/90"
-              >
-                {isFunding ? "Funding..." : "Fund Loan"}
-              </Button>
+        {/* My Loans Section */}
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">My Loans</h2>
+              <p className="text-sm text-muted-foreground">
+                Your encrypted loan requests
+              </p>
+            </div>
+            {isLoading && (
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
             )}
-          />
+          </div>
+
+          {myLoans.length === 0 ? (
+            <Card className="p-8 bg-card border-border text-center">
+              <Lock className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground">
+                No loans yet. Submit an encrypted request above to get started.
+              </p>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {myLoans.map((loan) => (
+                <LoanCard key={loan.id.toString()} loan={loan} />
+              ))}
+            </div>
+          )}
+
+          {/* Decryption Status */}
+          {decryptMessage && (
+            <div className="mt-4 text-sm text-muted-foreground text-center">
+              {decryptMessage}
+            </div>
+          )}
         </div>
       </main>
 
