@@ -34,7 +34,7 @@ export function ClientProviders({ children }: ClientProvidersProps) {
   useEffect(() => {
     // Only load config on client side
     import("@/config/wagmi-client").then((module) => {
-      setConfig(module.config);
+      setConfig(module.createWagmiConfig());
       setMounted(true);
     });
   }, []);
